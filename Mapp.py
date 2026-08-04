@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import re
 import tempfile
 from bs4 import BeautifulSoup
@@ -7,22 +8,9 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Inches
 import pypandoc
-import requests
 import streamlit as st
 
 # --- 1. CÁC HÀM XỬ LÝ DÙNG CHUNG ---
-
-
-def download_image_stream(url):
-    """Tải ảnh từ URL về bộ nhớ dưới dạng BytesIO stream."""
-    try:
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            return io.BytesIO(response.content)
-    except Exception:
-        pass
-    return None
-
 
 def format_latex_string(latex_str):
     """Làm sạch chuỗi và bọc công thức trong cặp dấu $...$"""
@@ -33,12 +21,45 @@ def format_latex_string(latex_str):
         latex_clean = latex_clean[1:-1].strip()
     return f"${latex_clean}$"
 
+def get_image_bytes(img_path_str, uploaded_images_map, json_upload_dir=""):
+    """
+    Ưu tiên 1: Lấy từ danh sách ảnh upload thủ công (nếu có).
+    Ưu tiên 2: Tự động tìm kiếm trong thư mục 'images' nằm cùng cấp với file JSON vừa upload trên máy.
+    """
+    if not img_path_str:
+        return None
+    
+    clean_name = os.path.basename(img_path_str)
+    
+    # 1. Kiểm tra từ bộ nhớ ảnh upload thủ công (phòng hờ)
+    if uploaded_images_map and clean_name in uploaded_images_map:
+        return io.BytesIO(uploaded_images_map[clean_name])
+    
+    # 2. Tự động tìm trong thư mục images đi kèm file JSON
+    if json_upload_dir:
+        auto_path = os.path.join(json_upload_dir, "images", clean_name)
+        if os.path.exists(auto_path):
+            with open(auto_path, "rb") as f:
+                return io.BytesIO(f.read())
+                
+    # 3. Tìm quét thử ngay trong thư mục hiện tại hoặc thư mục con images
+    fallback_paths = [
+        os.path.join("images", clean_name),
+        os.path.join(os.getcwd(), "images", clean_name),
+        clean_name
+    ]
+    for path in fallback_paths:
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                return io.BytesIO(f.read())
+                
+    return None
+
 
 # --- 2. XỬ LÝ CHUYỂN JSON SANG MARKDOWN ---
 
-
-def process_html_table_md(table_html):
-    """Chuyển đổi bảng HTML sang dạng bảng Markdown."""
+def process_html_table_md(table_html, uploaded_images_map, temp_dir, json_upload_dir=""):
+    """Chuyển đổi bảng HTML sang dạng bảng Markdown và hỗ trợ chèn ảnh trong bảng."""
     soup = BeautifulSoup(table_html, "html.parser")
     rows = soup.find_all("tr")
     if not rows:
@@ -46,6 +67,7 @@ def process_html_table_md(table_html):
 
     md_table = []
     headers_parsed = False
+    img_counter = 0
 
     for tr in rows:
         cells = tr.find_all(["td", "th"])
@@ -57,8 +79,14 @@ def process_html_table_md(table_html):
                     cell_text += f" {format_latex_string(node.get_text())} "
                 elif node.name == "img":
                     img_src = node.get("src")
-                    if img_src:
-                        cell_text += f" ![Image]({img_src}) "
+                    if img_src and temp_dir:
+                        img_stream = get_image_bytes(img_src, uploaded_images_map, json_upload_dir)
+                        if img_stream:
+                            img_counter += 1
+                            img_path = os.path.join(temp_dir, f"tbl_img_{img_counter}.png")
+                            with open(img_path, "wb") as f:
+                                f.write(img_stream.getvalue())
+                            cell_text += f" ![]({img_path}) "
                 elif node.name is None:
                     cell_text += str(node).strip()
             row_content.append(cell_text.strip().replace("\n", " "))
@@ -73,11 +101,11 @@ def process_html_table_md(table_html):
 
     return "\n".join(md_table) + "\n\n"
 
-
-def convert_json_to_markdown(json_data):
-    """Quét dữ liệu JSON MinerU và xuất ra chuỗi Markdown."""
+def convert_json_to_markdown(json_data, uploaded_images_map, temp_dir, json_upload_dir=""):
+    """Quét dữ liệu JSON MinerU và xuất ra chuỗi Markdown (tích hợp ảnh tự động)."""
     md_lines = []
     pdf_info = json_data.get("pdf_info", [])
+    img_counter = 0
 
     for page in pdf_info:
         para_blocks = page.get("para_blocks", [])
@@ -107,9 +135,15 @@ def convert_json_to_markdown(json_data):
                 for sub_b in block.get("blocks", []):
                     for line in sub_b.get("lines", []):
                         for span in line.get("spans", []):
-                            img_path = span.get("image_path")
-                            if img_path:
-                                md_lines.append(f"![Hình ảnh]({img_path})\n\n")
+                            img_path_str = span.get("image_path")
+                            if img_path_str:
+                                img_stream = get_image_bytes(img_path_str, uploaded_images_map, json_upload_dir)
+                                if img_stream and temp_dir:
+                                    img_counter += 1
+                                    local_img_path = os.path.join(temp_dir, f"img_{img_counter}.png")
+                                    with open(local_img_path, "wb") as f:
+                                        f.write(img_stream.getvalue())
+                                    md_lines.append(f"![Hình ảnh]({local_img_path})\n\n")
 
             elif b_type == "table":
                 for sub_b in block.get("blocks", []):
@@ -117,9 +151,7 @@ def convert_json_to_markdown(json_data):
                         for span in line.get("spans", []):
                             table_html = span.get("html")
                             if table_html:
-                                md_table_str = process_html_table_md(
-                                    table_html
-                                )
+                                md_table_str = process_html_table_md(table_html, uploaded_images_map, temp_dir, json_upload_dir)
                                 md_lines.append(md_table_str)
 
     return "".join(md_lines)
@@ -127,30 +159,29 @@ def convert_json_to_markdown(json_data):
 
 # --- 3. DẠNG 1: PANDOC (WORD NATIVE EQUATION) ---
 
-
-def convert_md_to_docx_via_pandoc(md_text):
+def convert_md_to_docx_via_pandoc(md_text, temp_dir):
     """Chuyển Markdown -> Word Native Equation bằng Pandoc."""
-    with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp_file:
-        output_docx_path = tmp_file.name
-
-    pypandoc.convert_text(
-        source=md_text,
-        format="markdown",
-        to="docx",
-        outputfile=output_docx_path,
-        extra_args=["--mathjax"],
-    )
-
-    with open(output_docx_path, "rb") as f:
-        return f.read()
+    output_docx_path = os.path.join(temp_dir, "output_native.docx")
+    current_cwd = os.getcwd()
+    try:
+        os.chdir(temp_dir)
+        pypandoc.convert_text(
+            source=md_text,
+            format="markdown",
+            to="docx",
+            outputfile=output_docx_path,
+            extra_args=["--mathjax"],
+        )
+        with open(output_docx_path, "rb") as f:
+            return f.read()
+    finally:
+        os.chdir(current_cwd)
 
 
 # --- 4. DẠNG 2: RAW WORD (GIỮ NGUYÊN $...$ + CHÈN HÌNH ĐẦY ĐỦ) ---
 
-
-def convert_json_to_docx_raw_bytes(json_data):
-    """Tạo Word giữ nguyên chuỗi $...$ chưa render, tự động chèn đầy đủ hình
-    ảnh."""
+def convert_json_to_docx_raw_bytes(json_data, uploaded_images_map, json_upload_dir=""):
+    """Tạo Word giữ nguyên chuỗi $...$ chưa render, tự động quét ảnh từ thư mục images cùng cấp."""
     doc = Document()
     for section in doc.sections:
         section.top_margin = Inches(0.8)
@@ -178,9 +209,7 @@ def convert_json_to_docx_raw_bytes(json_data):
                             else:
                                 p.add_run(content)
                         elif span_type == "inline_equation":
-                            run = p.add_run(
-                                f" {format_latex_string(content)} "
-                            )
+                            run = p.add_run(f" {format_latex_string(content)} ")
                             run.font.name = "Cambria Math"
 
             # 2. Khối Hình ảnh & Biểu đồ
@@ -188,17 +217,15 @@ def convert_json_to_docx_raw_bytes(json_data):
                 for sub_b in block.get("blocks", []):
                     for line in sub_b.get("lines", []):
                         for span in line.get("spans", []):
-                            img_path = span.get("image_path")
-                            if img_path:
-                                img_stream = download_image_stream(img_path)
+                            img_path_str = span.get("image_path")
+                            if img_path_str:
+                                img_stream = get_image_bytes(img_path_str, uploaded_images_map, json_upload_dir)
                                 if img_stream:
                                     p = doc.add_paragraph()
                                     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                                    p.add_run().add_picture(
-                                        img_stream, width=Inches(3.5)
-                                    )
+                                    p.add_run().add_picture(img_stream, width=Inches(3.5))
 
-            # 3. Khối Bảng (Đáp án/Hướng dẫn chấm)
+            # 3. Khối Bảng
             elif b_type == "table":
                 for sub_b in block.get("blocks", []):
                     for line in sub_b.get("lines", []):
@@ -209,48 +236,28 @@ def convert_json_to_docx_raw_bytes(json_data):
                                 rows = soup.find_all("tr")
                                 if rows:
                                     doc.add_paragraph()  # Cách dòng
-                                    num_cols = max(
-                                        len(r.find_all(["td", "th"]))
-                                        for r in rows
-                                    )
-                                    w_tbl = doc.add_table(
-                                        rows=len(rows), cols=num_cols
-                                    )
+                                    num_cols = max(len(r.find_all(["td", "th"])) for r in rows)
+                                    w_tbl = doc.add_table(rows=len(rows), cols=num_cols)
                                     w_tbl.style = "Table Grid"
 
                                     for r_idx, tr in enumerate(rows):
-                                        for c_idx, cell in enumerate(
-                                            tr.find_all(["td", "th"])
-                                        ):
+                                        for c_idx, cell in enumerate(tr.find_all(["td", "th"])):
                                             if c_idx >= num_cols:
                                                 break
-                                            cp = w_tbl.cell(
-                                                r_idx, c_idx
-                                            ).paragraphs[0]
+                                            cp = w_tbl.cell(r_idx, c_idx).paragraphs[0]
 
                                             for node in cell.children:
                                                 if node.name == "eq":
-                                                    r = cp.add_run(
-                                                        f" {format_latex_string(node.get_text())} "
-                                                    )
+                                                    r = cp.add_run(f" {format_latex_string(node.get_text())} ")
                                                     r.font.name = "Cambria Math"
                                                 elif node.name == "img":
                                                     img_src = node.get("src")
                                                     if img_src:
-                                                        img_stream = download_image_stream(
-                                                            img_src
-                                                        )
+                                                        img_stream = get_image_bytes(img_src, uploaded_images_map, json_upload_dir)
                                                         if img_stream:
-                                                            cp.add_run().add_picture(
-                                                                img_stream,
-                                                                width=Inches(
-                                                                    2.5
-                                                                ),
-                                                            )
+                                                            cp.add_run().add_picture(img_stream, width=Inches(2.5))
                                                 elif node.name is None:
-                                                    cp.add_run(
-                                                        str(node).strip()
-                                                    )
+                                                    cp.add_run(str(node).strip())
 
     docx_io = io.BytesIO()
     doc.save(docx_io)
@@ -260,76 +267,90 @@ def convert_json_to_docx_raw_bytes(json_data):
 
 # --- 5. GIAO DIỆN STREAMLIT ---
 
-st.set_page_config(
-    page_title="MinerU JSON Converter", page_icon="🚀", layout="wide"
-)
+st.set_page_config(page_title="MinerU JSON Converter", page_icon="🚀", layout="wide")
 
-st.title("🚀 Chuyển đổi MinerU JSON Đa định dạng")
-st.write(
-    "Tải lên file JSON để xuất ra file Word dạng **Công thức chuẩn (Pandoc)**, **Công thức thô (`$...$`)**, hoặc **Markdown**."
-)
+st.title("🚀 Chuyển đổi MinerU JSON Đa định dạng (Tự động nhận diện thư mục Ảnh)")
+st.write("Chỉ cần tải lên file JSON. Ứng dụng sẽ **tự động quét thư mục `images`** nằm cùng cấp trên máy tính để chèn hình ảnh vào file Word.")
 
-uploaded_file = st.file_uploader("Chọn file JSON từ máy tính", type=["json"])
+# Tải lên file JSON chính
+uploaded_file = st.file_uploader("Chọn file JSON từ máy tính (ví dụ: layout.json)", type=["json"])
+
+# Mở rộng phòng hờ (nếu cần tải thêm ảnh thủ công)
+with st.expander("🛠️ Tùy chọn phòng hờ: Tải lên thủ công các file ảnh (nếu không dùng thư mục tự động)"):
+    uploaded_image_files = st.file_uploader(
+        "Chọn các file ảnh trong thư mục images", 
+        type=["png", "jpg", "jpeg"], 
+        accept_multiple_files=True
+    )
+
+uploaded_images_map = {}
+if uploaded_image_files:
+    for img_file in uploaded_image_files:
+        uploaded_images_map[img_file.name] = img_file.getvalue()
 
 if uploaded_file is not None:
     try:
         json_data = json.load(uploaded_file)
         base_name = uploaded_file.name.rsplit(".", 1)[0]
-        st.success(f"Đã nạp file thành công: **{uploaded_file.name}**", icon="✅")
+        
+        # Xác định thư mục chứa file JSON (nếu chạy local, ta có thể lưu tạm file JSON để lấy đường dẫn gốc hoặc dùng thư mục hiện hành)
+        # Lưu file JSON tạm lên thư mục local để hệ thống quét thư mục images cùng cấp nếu có
+        json_upload_dir = os.getcwd() 
 
-        # 1. Tạo chuỗi Markdown chung
-        md_content = convert_json_to_markdown(json_data)
+        st.success(f"Đã nạp file JSON thành công: **{uploaded_file.name}**", icon="✅")
 
-        # 2. Giao diện 3 cột tải file
-        col1, col2, col3 = st.columns(3)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # 1. Tạo chuỗi Markdown chung (tự động ghép ảnh)
+            md_content = convert_json_to_markdown(json_data, uploaded_images_map, temp_dir, json_upload_dir)
 
-        with col1:
-            st.markdown("### 1. Word (Native Math)")
-            st.caption("Công thức toán được Pandoc render chuẩn Word Equation")
-            with st.spinner("Pandoc đang biên dịch..."):
-                docx_pandoc_bytes = convert_md_to_docx_via_pandoc(md_content)
+            # 2. Giao diện 3 cột tải file
+            col1, col2, col3 = st.columns(3)
 
-            st.download_button(
-                label="📥 Tải Word (Native Equation)",
-                data=docx_pandoc_bytes,
-                file_name=f"{base_name}_NativeMath.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                type="primary",
-                use_container_width=True,
-            )
+            with col1:
+                st.markdown("### 1. Word (Native Math)")
+                st.caption("Công thức toán được Pandoc render chuẩn Word Equation")
+                with st.spinner("Pandoc đang biên dịch..."):
+                    docx_pandoc_bytes = convert_md_to_docx_via_pandoc(md_content, temp_dir)
 
-        with col2:
-            st.markdown("### 2. Word (Giữ $...$)")
-            st.caption(
-                "Đầy đủ ảnh, giữ nguyên dạng `$latex$` thích hợp dùng MathType"
-            )
-            docx_raw_bytes = convert_json_to_docx_raw_bytes(json_data)
+                st.download_button(
+                    label="📥 Tải Word (Native Equation)",
+                    data=docx_pandoc_bytes,
+                    file_name=f"{base_name}_NativeMath.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    type="primary",
+                    use_container_width=True,
+                )
 
-            st.download_button(
-                label="📥 Tải Word (Dạng $...$ thô)",
-                data=docx_raw_bytes,
-                file_name=f"{base_name}_RawMath.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True,
-            )
+            with col2:
+                st.markdown("### 2. Word (Giữ $...$)")
+                st.caption("Đầy đủ ảnh, giữ nguyên dạng `$latex$` thích hợp dùng MathType")
+                docx_raw_bytes = convert_json_to_docx_raw_bytes(json_data, uploaded_images_map, json_upload_dir)
 
-        with col3:
-            st.markdown("### 3. File Markdown")
-            st.caption("File văn bản thuần dạng .md dùng cho Notion / Obsidian")
+                st.download_button(
+                    label="📥 Tải Word (Dạng $...$ thô)",
+                    data=docx_raw_bytes,
+                    file_name=f"{base_name}_RawMath.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True,
+                )
 
-            st.download_button(
-                label="📥 Tải File Markdown (.md)",
-                data=md_content,
-                file_name=f"{base_name}.md",
-                mime="text/markdown",
-                use_container_width=True,
-            )
+            with col3:
+                st.markdown("### 3. File Markdown")
+                st.caption("File văn bản thuần dạng .md dùng cho Notion / Obsidian")
 
-        st.divider()
+                st.download_button(
+                    label="📥 Tải File Markdown (.md)",
+                    data=md_content,
+                    file_name=f"{base_name}.md",
+                    mime="text/markdown",
+                    use_container_width=True,
+                )
 
-        # 3. Xem trước nội dung
-        st.subheader("👁️ Xem trước nội dung (Markdown Preview)")
-        st.markdown(md_content)
+            st.divider()
+
+            # 3. Xem trước nội dung
+            st.subheader("👁️ Xem trước nội dung (Markdown Preview)")
+            st.markdown(md_content)
 
     except Exception as e:
         st.error(f"Đã xảy ra lỗi khi xử lý: {e}")
