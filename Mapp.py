@@ -3,6 +3,7 @@ import json
 import os
 import re
 import tempfile
+import base64
 from bs4 import BeautifulSoup
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -63,7 +64,6 @@ def format_latex_string(latex_str):
 # --- 2. XỬ LÝ CHUYỂN JSON SANG MARKDOWN ---
 
 def process_html_table_md(table_html, uploaded_images_map, temp_dir, json_upload_dir=""):
-    """Chuyển đổi bảng HTML sang dạng bảng Markdown."""
     soup = BeautifulSoup(table_html, "html.parser")
     rows = soup.find_all("tr")
     if not rows:
@@ -106,7 +106,6 @@ def process_html_table_md(table_html, uploaded_images_map, temp_dir, json_upload
     return "\n".join(md_table) + "\n\n"
 
 def convert_json_to_markdown(json_data, uploaded_images_map, temp_dir, json_upload_dir=""):
-    """Quét dữ liệu JSON MinerU và xuất ra chuỗi Markdown."""
     md_lines = []
     pdf_info = json_data.get("pdf_info", [])
     img_counter = 0
@@ -171,7 +170,6 @@ def convert_json_to_markdown(json_data, uploaded_images_map, temp_dir, json_uplo
 # --- 3. DẠNG 1: PANDOC (WORD NATIVE EQUATION) ---
 
 def convert_md_to_docx_via_pandoc(md_text, temp_dir):
-    """Chuyển Markdown -> Word Native Equation bằng Pandoc."""
     output_docx_path = os.path.join(temp_dir, "output_native.docx")
     current_cwd = os.getcwd()
     try:
@@ -279,10 +277,10 @@ def convert_json_to_docx_raw_bytes(json_data, uploaded_images_map, json_upload_d
     return docx_io.getvalue()
 
 
-# --- 5. RENDER XEM TRƯỚC (ĐÃ FIX HIỂN THỊ ĐÚNG CÔNG THỨC TOÁN & ẢNH) ---
+# --- 5. RENDER XEM TRƯỚC (SỬ DỤNG CHUỖI MARKDOWN ĐỂ STREAMLIT RENDER LATEX CHUẨN) ---
 
 def render_preview_natively(json_data, uploaded_images_map, json_upload_dir=""):
-    """Duyệt JSON và hiển thị preview trực quan, render chuẩn công thức LaTeX ($...$)"""
+    """Duyệt JSON và hiển thị preview trực quan bằng cách tận dụng chuỗi Markdown chuẩn KaTeX"""
     pdf_info = json_data.get("pdf_info", [])
     
     for page in pdf_info:
@@ -301,8 +299,9 @@ def render_preview_natively(json_data, uploaded_images_map, json_upload_dir=""):
                             else:
                                 p_text += content
                         elif span_type == "inline_equation":
-                            # Dùng đúng cặp dấu $...$ để Streamlit tự động render công thức toán học
-                            p_text += f" {format_latex_string(content)} "
+                            # Sử dụng dấu $ kép hoặc đơn đúng chuẩn KaTeX
+                            clean_c = content.strip().replace("$", "")
+                            p_text += f" ${clean_c}$ "
                 if p_text.strip():
                     st.markdown(p_text.strip())
 
@@ -329,19 +328,17 @@ def render_preview_natively(json_data, uploaded_images_map, json_upload_dir=""):
                         for span in line.get("spans", []):
                             table_html = span.get("html")
                             if table_html:
-                                # Chuyển đổi các thẻ <eq> bên trong bảng thành định dạng $...$ để Streamlit hiển thị công thức toán trong bảng
                                 soup = BeautifulSoup(table_html, "html.parser")
+                                # Thay thế thẻ eq thành dạng $...$ để Streamlit render công thức toán trong bảng
                                 for eq_tag in soup.find_all("eq"):
-                                    eq_text = format_latex_string(eq_tag.get_text())
-                                    eq_tag.string = eq_text
+                                    eq_text = eq_tag.get_text().strip().replace("$", "")
+                                    eq_tag.string = f"${eq_text}$"
                                 
-                                # Xử lý ảnh nằm trong bảng nếu có
                                 for img_tag in soup.find_all("img"):
                                     img_src = img_tag.get("src")
                                     if img_src:
                                         img_stream = get_image_bytes(img_src, uploaded_images_map, json_upload_dir)
                                         if img_stream:
-                                            # Đính kèm ảnh base64 vào bảng để hiển thị trực tiếp trên preview
                                             encoded = base64.b64encode(img_stream.getvalue()).decode("utf-8")
                                             img_tag['src'] = f"data:image/png;base64,{encoded}"
                                             img_tag['width'] = "150"
@@ -428,7 +425,7 @@ if uploaded_file is not None:
 
             st.divider()
 
-            st.subheader("👁️ Xem trước nội dung (Preview chuẩn công thức toán học)")
+            st.subheader("👁️ Xem trước nội dung (Preview đã render công thức toán)")
             render_preview_natively(json_data, uploaded_images_map, json_upload_dir)
 
     except Exception as e:
