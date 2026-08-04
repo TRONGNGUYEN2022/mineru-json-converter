@@ -29,15 +29,18 @@ def get_image_bytes(img_path_str, uploaded_images_map, json_upload_dir=""):
     
     clean_name = os.path.basename(img_path_str)
     
+    # 1. Kiểm tra từ bộ nhớ ảnh upload thủ công
     if uploaded_images_map and clean_name in uploaded_images_map:
         return io.BytesIO(uploaded_images_map[clean_name])
     
+    # 2. Tự động tìm trong thư mục images đi kèm file JSON
     if json_upload_dir:
         auto_path = os.path.join(json_upload_dir, "images", clean_name)
         if os.path.exists(auto_path):
             with open(auto_path, "rb") as f:
                 return io.BytesIO(f.read())
                 
+    # 3. Tìm quét thử ngay trong thư mục hiện tại hoặc thư mục con images
     fallback_paths = [
         os.path.join("images", clean_name),
         os.path.join(os.getcwd(), "images", clean_name),
@@ -58,7 +61,7 @@ def image_to_base64_markdown(img_stream):
     return f"data:image/png;base64,{encoded}"
 
 
-# --- 2. XỬ LÝ CHUYỂN JSON SANG MARKDOWN (RIÊNG BIỆT CHO WEB VÀ PANDOC) ---
+# --- 2. XỬ LÝ CHUYỂN JSON SANG MARKDOWN (QUÉT TẤT CẢ CÁC TẦNG DỮ LIỆU ĐỂ KHÔNG SÓT HÌNH) ---
 
 def process_html_table_md(table_html, uploaded_images_map, temp_dir, json_upload_dir="", for_preview=False):
     soup = BeautifulSoup(table_html, "html.parser")
@@ -107,6 +110,48 @@ def process_html_table_md(table_html, uploaded_images_map, temp_dir, json_upload
 
     return "\n".join(md_table) + "\n\n"
 
+def extract_spans_and_images(content_blocks, uploaded_images_map, temp_dir, json_upload_dir, for_preview):
+    """Hàm phụ trợ quét đệ quy mọi span hoặc sub-block chứa hình ảnh hoặc text"""
+    result_text = ""
+    img_counter = 0
+    
+    # Duyệt qua các dòng/span nếu có
+    for line in content_blocks.get("lines", []):
+        for span in line.get("spans", []):
+            span_type = span.get("type")
+            content = span.get("content", "")
+
+            if span_type == "text":
+                if re.match(r"^Bài\s+\d+", content.strip()):
+                    result_text += f"**{content}**"
+                else:
+                    result_text += content
+            elif span_type == "inline_equation":
+                result_text += f" {format_latex_string(content)} "
+            
+            # Xử lý trường hợp hình ảnh nằm lọt trong span
+            img_path_str = span.get("image_path")
+            if img_path_str:
+                img_stream = get_image_bytes(img_path_str, uploaded_images_map, json_upload_dir)
+                if img_stream and temp_dir:
+                    img_counter += 1
+                    local_img_path = os.path.join(temp_dir, f"sub_img_{img_counter}.png")
+                    with open(local_img_path, "wb") as f:
+                        f.write(img_stream.getvalue())
+                    
+                    if for_preview:
+                        b64_str = image_to_base64_markdown(img_stream)
+                        result_text += f"\n\n<div align='center'><img src='{b64_str}' width='400'/></div>\n\n"
+                    else:
+                        result_text += f"\n\n![Hình ảnh]({local_img_path})\n\n"
+                        
+            # Xử lý trường hợp bảng HTML nằm trong span
+            table_html = span.get("html")
+            if table_html:
+                result_text += process_html_table_md(table_html, uploaded_images_map, temp_dir, json_upload_dir, for_preview)
+                
+    return result_text
+
 def convert_json_to_markdown(json_data, uploaded_images_map, temp_dir, json_upload_dir="", for_preview=False):
     md_lines = []
     pdf_info = json_data.get("pdf_info", [])
@@ -116,45 +161,59 @@ def convert_json_to_markdown(json_data, uploaded_images_map, temp_dir, json_uplo
         for block in page.get("para_blocks", []):
             b_type = block.get("type")
 
+            # 1. Khối Văn bản & Tiêu đề
             if b_type in ["text", "title"]:
-                p_text = ""
-                for line in block.get("lines", []):
-                    for span in line.get("spans", []):
-                        span_type = span.get("type")
-                        content = span.get("content", "")
+                block_text = extract_spans_and_images(block, uploaded_images_map, temp_dir, json_upload_dir, for_preview)
+                if block_text.strip():
+                    md_lines.append(block_text.strip() + "\n\n")
 
-                        if span_type == "text":
-                            if re.match(r"^Bài\s+\d+", content.strip()):
-                                p_text += f"**{content}**"
-                            else:
-                                p_text += content
-                        elif span_type == "inline_equation":
-                            p_text += f" {format_latex_string(content)} "
-
-                if p_text.strip():
-                    md_lines.append(p_text.strip() + "\n\n")
-
-            elif b_type in ["image", "chart"]:
+            # 2. Khối Hình ảnh, Biểu đồ hoặc Parabol (Quét toàn bộ sub-blocks)
+            elif b_type in ["image", "chart", "figure"]:
+                # Kiểm tra trực tiếp image_path ở cấp độ block nếu có
+                img_path_str = block.get("image_path")
+                if img_path_str:
+                    img_stream = get_image_bytes(img_path_str, uploaded_images_map, json_upload_dir)
+                    if img_stream and temp_dir:
+                        img_counter += 1
+                        local_img_path = os.path.join(temp_dir, f"img_{img_counter}.png")
+                        with open(local_img_path, "wb") as f:
+                            f.write(img_stream.getvalue())
+                        
+                        if for_preview:
+                            b64_str = image_to_base64_markdown(img_stream)
+                            md_lines.append(f"<div align='center'><img src='{b64_str}' width='400'/></div>\n\n")
+                        else:
+                            md_lines.append(f"![Hình ảnh]({local_img_path})\n\n")
+                
+                # Quét các sub-blocks bên trong (nơi chứa Parabol/Đồ thị của MinerU)
                 for sub_b in block.get("blocks", []):
-                    for line in sub_b.get("lines", []):
-                        for span in line.get("spans", []):
-                            img_path_str = span.get("image_path")
-                            if img_path_str:
-                                img_stream = get_image_bytes(img_path_str, uploaded_images_map, json_upload_dir)
-                                if img_stream and temp_dir:
-                                    img_counter += 1
-                                    local_img_path = os.path.join(temp_dir, f"img_{img_counter}.png")
-                                    with open(local_img_path, "wb") as f:
-                                        f.write(img_stream.getvalue())
-                                    
-                                    if for_preview:
-                                        b64_str = image_to_base64_markdown(img_stream)
-                                        md_lines.append(f"<div align='center'><img src='{b64_str}' width='400'/></div>\n\n")
-                                    else:
-                                        md_lines.append(f"![Hình ảnh]({local_img_path})\n\n")
+                    # Đệ quy quét tiếp các hình ảnh nằm sâu trong sub_b
+                    sub_img_path = sub_b.get("image_path")
+                    if sub_img_path:
+                        img_stream = get_image_bytes(sub_img_path, uploaded_images_map, json_upload_dir)
+                        if img_stream and temp_dir:
+                            img_counter += 1
+                            local_img_path = os.path.join(temp_dir, f"img_{img_counter}.png")
+                            with open(local_img_path, "wb") as f:
+                                f.write(img_stream.getvalue())
+                            
+                            if for_preview:
+                                b64_str = image_to_base64_markdown(img_stream)
+                                md_lines.append(f"<div align='center'><img src='{b64_str}' width='400'/></div>\n\n")
+                            else:
+                                md_lines.append(f"![Hình ảnh]({local_img_path})\n\n")
+                    
+                    # Quét qua lines/spans của sub-block
+                    sub_text = extract_spans_and_images(sub_b, uploaded_images_map, temp_dir, json_upload_dir, for_preview)
+                    if sub_text.strip():
+                        md_lines.append(sub_text.strip() + "\n\n")
 
+            # 3. Khối Bảng
             elif b_type == "table":
                 for sub_b in block.get("blocks", []):
+                    sub_text = extract_spans_and_images(sub_b, uploaded_images_map, temp_dir, json_upload_dir, for_preview)
+                    if sub_text.strip():
+                        md_lines.append(sub_text.strip() + "\n\n")
                     for line in sub_b.get("lines", []):
                         for span in line.get("spans", []):
                             table_html = span.get("html")
@@ -217,17 +276,25 @@ def convert_json_to_docx_raw_bytes(json_data, uploaded_images_map, json_upload_d
                             run = p.add_run(f" {format_latex_string(content)} ")
                             run.font.name = "Cambria Math"
 
-            elif b_type in ["image", "chart"]:
+            elif b_type in ["image", "chart", "figure"]:
+                # Quét trực tiếp hoặc qua sub-blocks cho Raw Word
+                paths_to_check = []
+                if block.get("image_path"):
+                    paths_to_check.append(block.get("image_path"))
                 for sub_b in block.get("blocks", []):
+                    if sub_b.get("image_path"):
+                        paths_to_check.append(sub_b.get("image_path"))
                     for line in sub_b.get("lines", []):
                         for span in line.get("spans", []):
-                            img_path_str = span.get("image_path")
-                            if img_path_str:
-                                img_stream = get_image_bytes(img_path_str, uploaded_images_map, json_upload_dir)
-                                if img_stream:
-                                    p = doc.add_paragraph()
-                                    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                                    p.add_run().add_picture(img_stream, width=Inches(3.5))
+                            if span.get("image_path"):
+                                paths_to_check.append(span.get("image_path"))
+                
+                for img_path_str in paths_to_check:
+                    img_stream = get_image_bytes(img_path_str, uploaded_images_map, json_upload_dir)
+                    if img_stream:
+                        p = doc.add_paragraph()
+                        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        p.add_run().add_picture(img_stream, width=Inches(3.5))
 
             elif b_type == "table":
                 for sub_b in block.get("blocks", []):
@@ -272,7 +339,7 @@ def convert_json_to_docx_raw_bytes(json_data, uploaded_images_map, json_upload_d
 
 st.set_page_config(page_title="MinerU JSON Converter", page_icon="🚀", layout="wide")
 
-st.title("🚀 Chuyển đổi MinerU JSON Đa định dạng")
+st.title("🚀 Chuyển đổi MinerU JSON Đa định dạng (Fix Đầy Đủ Parabol & Đồ Thị)")
 st.write("Tải lên file JSON và các file ảnh đi kèm để hiển thị trực quan và chuyển sang Word/Markdown.")
 
 uploaded_file = st.file_uploader("📥 Chọn file JSON từ máy tính (ví dụ: layout.json)", type=["json"])
