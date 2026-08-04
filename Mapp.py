@@ -1,3 +1,4 @@
+import base64
 import io
 import json
 import os
@@ -55,11 +56,18 @@ def get_image_bytes(img_path_str, uploaded_images_map, json_upload_dir=""):
                 
     return None
 
+def image_to_base64_markdown(img_stream):
+    """Chuyển đổi stream ảnh sang định dạng Base64 để hiển thị trực tiếp trong st.markdown"""
+    if not img_stream:
+        return ""
+    encoded = base64.b64encode(img_stream.getvalue()).decode("utf-8")
+    return f"data:image/png;base64,{encoded}"
+
 
 # --- 2. XỬ LÝ CHUYỂN JSON SANG MARKDOWN ---
 
-def process_html_table_md(table_html, uploaded_images_map, temp_dir, json_upload_dir=""):
-    """Chuyển đổi bảng HTML sang dạng bảng Markdown và hỗ trợ chèn ảnh trong bảng."""
+def process_html_table_md(table_html, uploaded_images_map, json_upload_dir=""):
+    """Chuyển đổi bảng HTML sang dạng bảng Markdown và hỗ trợ nhúng ảnh Base64 trong bảng."""
     soup = BeautifulSoup(table_html, "html.parser")
     rows = soup.find_all("tr")
     if not rows:
@@ -67,7 +75,6 @@ def process_html_table_md(table_html, uploaded_images_map, temp_dir, json_upload
 
     md_table = []
     headers_parsed = False
-    img_counter = 0
 
     for tr in rows:
         cells = tr.find_all(["td", "th"])
@@ -79,14 +86,11 @@ def process_html_table_md(table_html, uploaded_images_map, temp_dir, json_upload
                     cell_text += f" {format_latex_string(node.get_text())} "
                 elif node.name == "img":
                     img_src = node.get("src")
-                    if img_src and temp_dir:
+                    if img_src:
                         img_stream = get_image_bytes(img_src, uploaded_images_map, json_upload_dir)
                         if img_stream:
-                            img_counter += 1
-                            img_path = os.path.join(temp_dir, f"tbl_img_{img_counter}.png")
-                            with open(img_path, "wb") as f:
-                                f.write(img_stream.getvalue())
-                            cell_text += f" ![]({img_path}) "
+                            b64_str = image_to_base64_markdown(img_stream)
+                            cell_text += f" <img src='{b64_str}' width='200'> "
                 elif node.name is None:
                     cell_text += str(node).strip()
             row_content.append(cell_text.strip().replace("\n", " "))
@@ -101,11 +105,10 @@ def process_html_table_md(table_html, uploaded_images_map, temp_dir, json_upload
 
     return "\n".join(md_table) + "\n\n"
 
-def convert_json_to_markdown(json_data, uploaded_images_map, temp_dir, json_upload_dir=""):
-    """Quét dữ liệu JSON MinerU và xuất ra chuỗi Markdown (tích hợp ảnh tự động)."""
+def convert_json_to_markdown(json_data, uploaded_images_map, json_upload_dir=""):
+    """Quét dữ liệu JSON MinerU và xuất ra chuỗi Markdown tích hợp ảnh Base64 cho UI preview."""
     md_lines = []
     pdf_info = json_data.get("pdf_info", [])
-    img_counter = 0
 
     for page in pdf_info:
         para_blocks = page.get("para_blocks", [])
@@ -138,12 +141,10 @@ def convert_json_to_markdown(json_data, uploaded_images_map, temp_dir, json_uplo
                             img_path_str = span.get("image_path")
                             if img_path_str:
                                 img_stream = get_image_bytes(img_path_str, uploaded_images_map, json_upload_dir)
-                                if img_stream and temp_dir:
-                                    img_counter += 1
-                                    local_img_path = os.path.join(temp_dir, f"img_{img_counter}.png")
-                                    with open(local_img_path, "wb") as f:
-                                        f.write(img_stream.getvalue())
-                                    md_lines.append(f"![Hình ảnh]({local_img_path})\n\n")
+                                if img_stream:
+                                    b64_str = image_to_base64_markdown(img_stream)
+                                    # Sử dụng thẻ HTML img trực tiếp để kiểm soát kích thước hiển thị tốt hơn
+                                    md_lines.append(f"<div align='center'><img src='{b64_str}' width='400'/></div>\n\n")
 
             elif b_type == "table":
                 for sub_b in block.get("blocks", []):
@@ -151,16 +152,14 @@ def convert_json_to_markdown(json_data, uploaded_images_map, temp_dir, json_uplo
                         for span in line.get("spans", []):
                             table_html = span.get("html")
                             if table_html:
-                                md_table_str = process_html_table_md(table_html, uploaded_images_map, temp_dir, json_upload_dir)
+                                md_table_str = process_html_table_md(table_html, uploaded_images_map, json_upload_dir)
                                 md_lines.append(md_table_str)
 
     return "".join(md_lines)
 
 
 # --- 3. DẠNG 1: PANDOC (WORD NATIVE EQUATION) ---
-
 def convert_md_to_docx_via_pandoc(md_text, temp_dir):
-    """Chuyển Markdown -> Word Native Equation bằng Pandoc."""
     output_docx_path = os.path.join(temp_dir, "output_native.docx")
     current_cwd = os.getcwd()
     try:
@@ -178,10 +177,8 @@ def convert_md_to_docx_via_pandoc(md_text, temp_dir):
         os.chdir(current_cwd)
 
 
-# --- 4. DẠNG 2: RAW WORD (GIỮ NGUYÊN $...$ + CHÈN HÌNH ĐẦY ĐỦ) ---
-
+# --- 4. DẠNG 2: RAW WORD ---
 def convert_json_to_docx_raw_bytes(json_data, uploaded_images_map, json_upload_dir=""):
-    """Tạo Word giữ nguyên chuỗi $...$ chưa render, tự động quét ảnh từ thư mục images cùng cấp."""
     doc = Document()
     for section in doc.sections:
         section.top_margin = Inches(0.8)
@@ -194,7 +191,6 @@ def convert_json_to_docx_raw_bytes(json_data, uploaded_images_map, json_upload_d
         for block in page.get("para_blocks", []):
             b_type = block.get("type")
 
-            # 1. Khối Văn bản & Tiêu đề
             if b_type in ["text", "title"]:
                 p = doc.add_paragraph()
                 for line in block.get("lines", []):
@@ -212,7 +208,6 @@ def convert_json_to_docx_raw_bytes(json_data, uploaded_images_map, json_upload_d
                             run = p.add_run(f" {format_latex_string(content)} ")
                             run.font.name = "Cambria Math"
 
-            # 2. Khối Hình ảnh & Biểu đồ
             elif b_type in ["image", "chart"]:
                 for sub_b in block.get("blocks", []):
                     for line in sub_b.get("lines", []):
@@ -225,7 +220,6 @@ def convert_json_to_docx_raw_bytes(json_data, uploaded_images_map, json_upload_d
                                     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                                     p.add_run().add_picture(img_stream, width=Inches(3.5))
 
-            # 3. Khối Bảng
             elif b_type == "table":
                 for sub_b in block.get("blocks", []):
                     for line in sub_b.get("lines", []):
@@ -235,7 +229,7 @@ def convert_json_to_docx_raw_bytes(json_data, uploaded_images_map, json_upload_d
                                 soup = BeautifulSoup(table_html, "html.parser")
                                 rows = soup.find_all("tr")
                                 if rows:
-                                    doc.add_paragraph()  # Cách dòng
+                                    doc.add_paragraph()
                                     num_cols = max(len(r.find_all(["td", "th"])) for r in rows)
                                     w_tbl = doc.add_table(rows=len(rows), cols=num_cols)
                                     w_tbl.style = "Table Grid"
@@ -270,12 +264,10 @@ def convert_json_to_docx_raw_bytes(json_data, uploaded_images_map, json_upload_d
 st.set_page_config(page_title="MinerU JSON Converter", page_icon="🚀", layout="wide")
 
 st.title("🚀 Chuyển đổi MinerU JSON Đa định dạng")
-st.write("Tải lên file JSON và các file ảnh đi kèm để ứng dụng tự động xử lý và chuyển sang Word/Markdown.")
+st.write("Tải lên file JSON và các file ảnh đi kèm để hiển thị trực quan và chuyển sang Word/Markdown.")
 
-# 1. Tải lên file JSON chính
 uploaded_file = st.file_uploader("📥 Chọn file JSON từ máy tính (ví dụ: layout.json)", type=["json"])
 
-# 2. Nút tải lên các file ảnh thủ công chính thức ngay giao diện chính
 uploaded_image_files = st.file_uploader(
     "🖼️ Tải lên các file ảnh trong thư mục images (Có thể chọn nhiều ảnh cùng lúc)", 
     type=["png", "jpg", "jpeg"], 
@@ -292,16 +284,14 @@ if uploaded_file is not None:
     try:
         json_data = json.load(uploaded_file)
         base_name = uploaded_file.name.rsplit(".", 1)[0]
-        
         json_upload_dir = os.getcwd() 
 
         st.success(f"Đã nạp file JSON thành công: **{uploaded_file.name}**", icon="✅")
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # 1. Tạo chuỗi Markdown chung (tự động ghép ảnh)
-            md_content = convert_json_to_markdown(json_data, uploaded_images_map, temp_dir, json_upload_dir)
+        # Tạo nội dung Markdown (có nhúng Base64 image để hiện trực tiếp trên web)
+        md_content = convert_json_to_markdown(json_data, uploaded_images_map, json_upload_dir)
 
-            # 2. Giao diện 3 cột tải file
+        with tempfile.TemporaryDirectory() as temp_dir:
             col1, col2, col3 = st.columns(3)
 
             with col1:
@@ -346,9 +336,9 @@ if uploaded_file is not None:
 
             st.divider()
 
-            # 3. Xem trước nội dung
+            # Xem trước nội dung (Hiển thị ảnh trực tiếp nhờ Base64)
             st.subheader("👁️ Xem trước nội dung (Markdown Preview)")
-            st.markdown(md_content)
+            st.markdown(md_content, unsafe_allow_html=True)
 
     except Exception as e:
         st.error(f"Đã xảy ra lỗi khi xử lý: {e}")
