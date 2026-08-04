@@ -31,7 +31,7 @@ def get_image_bytes(img_path_str, uploaded_images_map, json_upload_dir=""):
     
     clean_name = os.path.basename(img_path_str)
     
-    # 1. Kiểm tra từ bộ nhớ ảnh upload thủ công (phòng hờ)
+    # 1. Kiểm tra từ bộ nhớ ảnh upload thủ công
     if uploaded_images_map and clean_name in uploaded_images_map:
         return io.BytesIO(uploaded_images_map[clean_name])
     
@@ -269,32 +269,30 @@ def convert_json_to_docx_raw_bytes(json_data, uploaded_images_map, json_upload_d
 
 st.set_page_config(page_title="MinerU JSON Converter", page_icon="🚀", layout="wide")
 
-st.title("🚀 Chuyển đổi MinerU JSON Đa định dạng (Tự động nhận diện thư mục Ảnh)")
-st.write("Chỉ cần tải lên file JSON. Ứng dụng sẽ **tự động quét thư mục `images`** nằm cùng cấp trên máy tính để chèn hình ảnh vào file Word.")
+st.title("🚀 Chuyển đổi MinerU JSON Đa định dạng")
+st.write("Tải lên file JSON và các file ảnh đi kèm để ứng dụng tự động xử lý và chuyển sang Word/Markdown.")
 
-# Tải lên file JSON chính
-uploaded_file = st.file_uploader("Chọn file JSON từ máy tính (ví dụ: layout.json)", type=["json"])
+# 1. Tải lên file JSON chính
+uploaded_file = st.file_uploader("📥 Chọn file JSON từ máy tính (ví dụ: layout.json)", type=["json"])
 
-# Mở rộng phòng hờ (nếu cần tải thêm ảnh thủ công)
-with st.expander("🛠️ Tùy chọn phòng hờ: Tải lên thủ công các file ảnh (nếu không dùng thư mục tự động)"):
-    uploaded_image_files = st.file_uploader(
-        "Chọn các file ảnh trong thư mục images", 
-        type=["png", "jpg", "jpeg"], 
-        accept_multiple_files=True
-    )
+# 2. Nút tải lên các file ảnh thủ công chính thức ngay giao diện chính
+uploaded_image_files = st.file_uploader(
+    "🖼️ Tải lên các file ảnh trong thư mục images (Có thể chọn nhiều ảnh cùng lúc)", 
+    type=["png", "jpg", "jpeg"], 
+    accept_multiple_files=True
+)
 
 uploaded_images_map = {}
 if uploaded_image_files:
     for img_file in uploaded_image_files:
         uploaded_images_map[img_file.name] = img_file.getvalue()
+    st.success(f"Đã tải lên thành công {len(uploaded_image_files)} file ảnh thủ công.", icon="✅")
 
 if uploaded_file is not None:
     try:
         json_data = json.load(uploaded_file)
         base_name = uploaded_file.name.rsplit(".", 1)[0]
         
-        # Xác định thư mục chứa file JSON (nếu chạy local, ta có thể lưu tạm file JSON để lấy đường dẫn gốc hoặc dùng thư mục hiện hành)
-        # Lưu file JSON tạm lên thư mục local để hệ thống quét thư mục images cùng cấp nếu có
         json_upload_dir = os.getcwd() 
 
         st.success(f"Đã nạp file JSON thành công: **{uploaded_file.name}**", icon="✅")
