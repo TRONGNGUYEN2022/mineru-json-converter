@@ -307,7 +307,6 @@ def convert_json_to_docx_raw_bytes(json_data, uploaded_images_map, json_upload_d
 def render_preview_with_copy(json_data, uploaded_images_map, json_upload_dir=""):
     """Duyệt JSON, hiển thị giao diện đẹp và tích hợp nút Copy nội dung vào clipboard dán nhanh vào Word"""
     
-    # Xây dựng cấu trúc HTML nội dung Preview để phục vụ việc Copy
     preview_inner_html = '<div id="content-to-copy" style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">'
     
     pdf_info = json_data.get("pdf_info", [])
@@ -373,8 +372,8 @@ def render_preview_with_copy(json_data, uploaded_images_map, json_upload_dir="")
 
     preview_inner_html += '</div>'
 
-    # Đoạn mã HTML kết hợp nút bấm và Javascript thực thi lệnh copy vào Clipboard
-    copier_component = f"""
+    # Sử dụng chuỗi thông thường (không phải f-string) hoặc nhân đôi {{ }} cho cú pháp JS
+    copier_component = """
     <div style="margin-bottom: 15px;">
         <button onclick="copyContentToClipboard()" style="padding: 10px 20px; background-color: #2b6cb0; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
             📋 Sao chép nội dung Preview (Dán thẳng vào Word)
@@ -383,28 +382,28 @@ def render_preview_with_copy(json_data, uploaded_images_map, json_upload_dir="")
     </div>
     
     <div style="background-color: #ffffff; padding: 25px; border-radius: 10px; border: 1px solid #cbd5e0; max-height: 550px; overflow-y: auto;">
-        {preview_inner_html}
+        __PREVIEW_INNER_HTML__
     </div>
 
     <script>
-    function copyContentToClipboard() {{
+    function copyContentToClipboard() {
         const range = document.createRange();
         range.selectNode(document.getElementById('content-to-copy'));
         window.getSelection().removeAllRanges();
         window.getSelection().addRange(range);
         
-        try {{
+        try {
             document.execCommand('copy');
             const status = document.getElementById('copy-status');
             status.style.display = 'inline';
-            setTimeout(() => {{ status.style.display = 'none'; }}, 3000);
-        } catch (err) {{
+            setTimeout(() => { status.style.display = 'none'; }, 3000);
+        } catch (err) {
             alert('Không thể sao chép tự động!');
-        }}
+        }
         window.getSelection().removeAllRanges();
-    }}
+    }
     </script>
-    """
+    """.replace("__PREVIEW_INNER_HTML__", preview_inner_html)
     
     st.markdown("### 👁️ Xem trước nội dung & Sao chép nhanh")
     components.html(copier_component, height=620, scrolling=False)
