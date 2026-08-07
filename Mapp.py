@@ -10,7 +10,7 @@ import streamlit.components.v1 as components
 
 # --- CẤU HÌNH GIAO DIỆN TRANG ---
 st.set_page_config(
-    page_title="MinerU Math Equation Preview", 
+    page_title="MinerU Math Equation Preview Pro", 
     page_icon="📐", 
     layout="wide"
 )
@@ -63,20 +63,19 @@ def get_image_bytes(img_path_str, uploaded_images_map, json_upload_dir=""):
     return None
 
 def clean_and_wrap_latex(latex_str):
-    """Làm sạch chuỗi LaTeX và bọc trong cặp dấu $...$ để KaTeX nhận diện chuẩn Equation"""
+    """Làm sạch chuỗi LaTeX và bọc trong cặp dấu $...$ chuẩn KaTeX hiển thị công thức"""
     if not latex_str:
         return ""
     clean_str = latex_str.strip()
-    # Loại bỏ các dấu $ thừa nếu có sẵn trong JSON
     if clean_str.startswith("$") and clean_str.endswith("$"):
         clean_str = clean_str[1:-1].strip()
     return f"${clean_str}$"
 
 
-# --- 2. RENDER PREVIEW TẬP TRUNG HOÀN TOÀN VÀO CÔNG THỨC TOÁN EQUATION ---
+# --- 2. RENDER PREVIEW TẬP TRUNG HOÀN TOÀN VÀO CÔNG THỨC TOÁN & LƯU WORD ---
 
-def render_pure_math_preview(json_data, uploaded_images_map, json_upload_dir=""):
-    """Duyệt JSON, xử lý chuẩn xác các thẻ inline_equation và bảng biểu chứa công thức toán"""
+def render_pure_math_preview(json_data, uploaded_images_map, json_upload_dir="", file_name="document"):
+    """Duyệt JSON, render công thức KaTeX và thêm nút Lưu nhanh ra Word / Sao chép"""
     
     preview_inner_html = '<div id="content-to-copy" style="font-family: Arial, sans-serif; line-height: 1.8; color: #2d3748; font-size: 16px;">'
     
@@ -97,7 +96,6 @@ def render_pure_math_preview(json_data, uploaded_images_map, json_upload_dir="")
                             else:
                                 p_text += content
                         elif span_type == "inline_equation":
-                            # Đảm bảo công thức toán học được bọc chuẩn KaTeX
                             latex_formatted = clean_and_wrap_latex(content)
                             p_text += f" {latex_formatted} "
                 if p_text.strip():
@@ -128,7 +126,6 @@ def render_pure_math_preview(json_data, uploaded_images_map, json_upload_dir="")
                             table_html = span.get("html")
                             if table_html:
                                 soup = BeautifulSoup(table_html, "html.parser")
-                                # Xử lý các thẻ công thức <eq> trong bảng
                                 for eq_tag in soup.find_all("eq"):
                                     eq_text = eq_tag.get_text()
                                     eq_tag.string = clean_and_wrap_latex(eq_text)
@@ -145,7 +142,7 @@ def render_pure_math_preview(json_data, uploaded_images_map, json_upload_dir="")
 
     preview_inner_html += '</div>'
 
-    # Nhúng KaTeX qua CDN để render toàn bộ công thức toán học (Equation) đẹp mắt và có nút Copy
+    # Tích hợp thư viện html-docx-js qua CDN để người dùng bấm nút là tải xuống file .docx trực tiếp từ Preview
     copier_component = f"""
     <!DOCTYPE html>
     <html>
@@ -160,11 +157,12 @@ def render_pure_math_preview(json_data, uploaded_images_map, json_upload_dir="")
                 ],
                 throwOnError: false
             }});"></script>
+        <!-- Thư viện chuyển đổi HTML sang Word (.docx) trực tiếp trên trình duyệt -->
+        <script src="https://cdn.jsdelivr.net/npm/html-docx-js@0.3.1/dist/html-docx.js"></script>
         <style>
             body {{ font-family: Arial, sans-serif; padding: 10px; background-color: #ffffff; }}
-            .btn-copy {{
+            .btn-action {{
                 padding: 10px 20px;
-                background-color: #2b6cb0;
                 color: white;
                 border: none;
                 border-radius: 6px;
@@ -172,10 +170,14 @@ def render_pure_math_preview(json_data, uploaded_images_map, json_upload_dir="")
                 font-weight: bold;
                 font-size: 14px;
                 box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+                margin-right: 10px;
                 margin-bottom: 15px;
             }}
+            .btn-copy {{ background-color: #2b6cb0; }}
             .btn-copy:hover {{ background-color: #2c5282; }}
-            #copy-status {{ margin-left: 10px; color: #2f855a; font-weight: bold; font-size: 13px; display: none; }}
+            .btn-word {{ background-color: #2f855a; }}
+            .btn-word:hover {{ background-color: #276749; }}
+            #status-msg {{ margin-left: 10px; color: #2f855a; font-weight: bold; font-size: 13px; display: none; }}
             .preview-card {{
                 background-color: #ffffff;
                 padding: 30px;
@@ -188,11 +190,12 @@ def render_pure_math_preview(json_data, uploaded_images_map, json_upload_dir="")
     </head>
     <body>
         <div>
-            <button class="btn-copy" onclick="copyContentToClipboard()">📋 Sao chép nội dung (Dán thẳng vào Word)</button>
-            <span id="copy-status">✔ Đã sao chép thành công!</span>
+            <button class="btn-action btn-copy" onclick="copyContentToClipboard()">📋 Sao chép nhanh (Dán vào Word)</button>
+            <button class="btn-action btn-word" onclick="saveAsWordDocx()">💾 Lưu thành file Word (.docx)</button>
+            <span id="status-msg">✔ Thao tác thành công!</span>
         </div>
         
-        <div class="preview-card">
+        <div class="preview-card" id="preview-box">
             {preview_inner_html}
         </div>
 
@@ -205,27 +208,45 @@ def render_pure_math_preview(json_data, uploaded_images_map, json_upload_dir="")
             
             try {{
                 document.execCommand('copy');
-                const status = document.getElementById('copy-status');
-                status.style.display = 'inline';
-                setTimeout(() => {{ status.style.display = 'none'; }}, 3000);
+                showStatus("Đã sao chép vào bộ nhớ tạm! Mở Word và nhấn Ctrl+V");
             }} catch (err) {{
                 alert('Không thể sao chép tự động!');
             }}
             window.getSelection().removeAllRanges();
+        }}
+
+        function saveAsWordDocx() {{
+            const contentHTML = document.getElementById('preview-box').innerHTML;
+            const converted = htmlDocx.asBlob('<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>' + contentHTML + '</body></html>');
+            
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(converted);
+            link.download = "{file_name}_preview.docx";
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            showStatus("Đã tải xuống file Word thành công!");
+        }}
+
+        function showStatus(msg) {{
+            const status = document.getElementById('status-msg');
+            status.innerText = "✔ " + msg;
+            status.style.display = 'inline';
+            setTimeout(() => {{ status.style.display = 'none'; }}, 4000);
         }}
         </script>
     </body>
     </html>
     """
     
-    st.markdown("### 👁️ Bản xem trước Công thức Toán học (Equation & KaTeX)")
-    components.html(copier_component, height=680, scrolling=False)
+    st.markdown("### 👁️ Bản xem trước Công thức Toán học & Tùy chọn lưu nhanh")
+    components.html(copier_component, height=700, scrolling=False)
 
 
 # --- 3. GIAO DIỆN STREAMLIT CHÍNH ---
 
 st.markdown("<h1 style='color: #1a202c;'>📐 MinerU Math Equation Preview Pro</h1>", unsafe_allow_html=True)
-st.write("Tải lên file JSON kết quả từ MinerU để xem trước trực quan toàn bộ văn bản, hình ảnh, bảng biểu và đặc biệt render chuẩn **Công thức toán học (Equation)**.")
+st.write("Tải lên file JSON kết quả từ MinerU để xem trước văn bản, hình ảnh, bảng biểu, công thức toán học sắc nét và hỗ trợ lưu file Word ngay lập tức.")
 
 st.markdown("---")
 col_up1, col_up2 = st.columns(2)
@@ -247,11 +268,12 @@ if uploaded_file is not None:
     try:
         json_data = json.load(uploaded_file)
         json_upload_dir = os.getcwd()
+        base_name = uploaded_file.name.rsplit(".", 1)[0]
         
         st.success(f"Đã tải file thành công: **{uploaded_file.name}**", icon="🚀")
         st.divider()
 
-        render_pure_math_preview(json_data, uploaded_images_map, json_upload_dir)
+        render_pure_math_preview(json_data, uploaded_images_map, json_upload_dir, file_name=base_name)
 
     except Exception as e:
         st.error(f"Đã xảy ra lỗi khi xử lý file JSON: {e}")
