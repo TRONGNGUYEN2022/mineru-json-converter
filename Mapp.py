@@ -1,9 +1,9 @@
+import base64
 import io
 import json
 import os
 import re
 import tempfile
-import base64
 from bs4 import BeautifulSoup
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -11,6 +11,47 @@ from docx.shared import Inches
 import pypandoc
 import requests
 import streamlit as st
+
+# --- CẤU HÌNH GIAO DIỆN TRANG ---
+st.set_page_config(
+    page_title="MinerU JSON Converter Pro", 
+    page_icon="✨", 
+    layout="wide"
+)
+
+# --- CSS TÙY CHỈNH ĐỂ "TRANG ĐIỂM" GIAO DIỆN ---
+st.markdown("""
+    <style>
+    /* Tổng thể ứng dụng */
+    .main {
+        background-color: #f8f9fa;
+    }
+    
+    /* Khung chứa Preview */
+    .preview-container {
+        background-color: #ffffff;
+        padding: 30px;
+        border-radius: 12px;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
+        border: 1px solid #e9ecef;
+        margin-top: 20px;
+        margin-bottom: 30px;
+    }
+    
+    /* Tiêu đề ứng dụng */
+    .app-title {
+        font-weight: 800;
+        color: #1e293b;
+    }
+    
+    /* Card thông tin */
+    .stDownloadButton button {
+        font-weight: 600;
+        border-radius: 8px;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 
 # --- 1. CÁC HÀM XỬ LÝ DÙNG CHUNG ---
 
@@ -277,10 +318,14 @@ def convert_json_to_docx_raw_bytes(json_data, uploaded_images_map, json_upload_d
     return docx_io.getvalue()
 
 
-# --- 5. RENDER XEM TRƯỚC (SỬ DỤNG CHUỖI MARKDOWN ĐỂ STREAMLIT RENDER LATEX CHUẨN) ---
+# --- 5. RENDER XEM TRƯỚC (ĐÃ ĐƯỢC THIẾT KẾ LẠI GIAO DIỆN) ---
 
 def render_preview_natively(json_data, uploaded_images_map, json_upload_dir=""):
-    """Duyệt JSON và hiển thị preview trực quan bằng cách tận dụng chuỗi Markdown chuẩn KaTeX"""
+    """Duyệt JSON và hiển thị preview trực quan bên trong một khung thẻ (Card) sang trọng"""
+    st.markdown('<div class="preview-container">', unsafe_allow_html=True)
+    st.markdown("### 👁️ Bản xem trước tài liệu (KaTeX Render)")
+    st.markdown("---")
+    
     pdf_info = json_data.get("pdf_info", [])
     
     for page in pdf_info:
@@ -299,7 +344,6 @@ def render_preview_natively(json_data, uploaded_images_map, json_upload_dir=""):
                             else:
                                 p_text += content
                         elif span_type == "inline_equation":
-                            # Sử dụng dấu $ kép hoặc đơn đúng chuẩn KaTeX
                             clean_c = content.strip().replace("$", "")
                             p_text += f" ${clean_c}$ "
                 if p_text.strip():
@@ -329,7 +373,6 @@ def render_preview_natively(json_data, uploaded_images_map, json_upload_dir=""):
                             table_html = span.get("html")
                             if table_html:
                                 soup = BeautifulSoup(table_html, "html.parser")
-                                # Thay thế thẻ eq thành dạng $...$ để Streamlit render công thức toán trong bảng
                                 for eq_tag in soup.find_all("eq"):
                                     eq_text = eq_tag.get_text().strip().replace("$", "")
                                     eq_tag.string = f"${eq_text}$"
@@ -344,53 +387,61 @@ def render_preview_natively(json_data, uploaded_images_map, json_upload_dir=""):
                                             img_tag['width'] = "150"
 
                                 st.markdown(str(soup), unsafe_allow_html=True)
+                                
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
-# --- 6. GIAO DIỆN STREAMLIT ---
+# --- 6. GIAO DIỆN STREAMLIT (ĐƯA VÀO SIDEBAR & TỐI ƯU LAYOUT) ---
 
-st.set_page_config(
-    page_title="MinerU JSON Converter", page_icon="🚀", layout="wide"
-)
+st.markdown("<h1 class='app-title'>✨ MinerU JSON Converter Pro</h1>", unsafe_allow_html=True)
+st.write("Công cụ chuyển đổi file JSON thông minh hỗ trợ render công thức toán học, bảng biểu và hình ảnh trực quan sang Word & Markdown.")
 
-st.title("🚀 Chuyển đổi MinerU JSON Đa định dạng")
-st.write(
-    "Tải lên file JSON và các file ảnh đi kèm để xuất ra file Word dạng **Công thức chuẩn (Pandoc)**, **Công thức thô (`$...$`)**, hoặc **Markdown**."
-)
+# --- SIDEBAR: KHU VỰC TẢI LÊN ---
+with st.sidebar:
+    st.header("📂 Tải lên dữ liệu")
+    st.markdown("---")
+    
+    uploaded_file = st.file_uploader("📥 Chọn file JSON", type=["json"])
 
-uploaded_file = st.file_uploader("📥 Chọn file JSON từ máy tính", type=["json"])
+    uploaded_image_files = st.file_uploader(
+        "🖼️ Tải lên thư mục ảnh", 
+        type=["png", "jpg", "jpeg"], 
+        accept_multiple_files=True,
+        help="Có thể chọn nhiều file ảnh đi kèm cùng lúc"
+    )
 
-uploaded_image_files = st.file_uploader(
-    "🖼️ Tải lên các file ảnh trong thư mục images (Có thể chọn nhiều ảnh cùng lúc)", 
-    type=["png", "jpg", "jpeg"], 
-    accept_multiple_files=True
-)
+    uploaded_images_map = {}
+    if uploaded_image_files:
+        for img_file in uploaded_image_files:
+            uploaded_images_map[img_file.name] = img_file.getvalue()
+        st.success(f"Đã nạp {len(uploaded_image_files)} ảnh thành công!", icon="✅")
+        
+    st.markdown("---")
+    st.info("💡 **Mẹo:** Bạn có thể tải file JSON kết quả từ MinerU cùng với các hình ảnh liên quan để hệ thống tự động đồng bộ.")
 
-uploaded_images_map = {}
-if uploaded_image_files:
-    for img_file in uploaded_image_files:
-        uploaded_images_map[img_file.name] = img_file.getvalue()
-    st.success(f"Đã tải lên thành công {len(uploaded_image_files)} file ảnh thủ công.", icon="✅")
-
+# --- KHU VỰC CHÍNH ---
 if uploaded_file is not None:
     try:
         json_data = json.load(uploaded_file)
         base_name = uploaded_file.name.rsplit(".", 1)[0]
         json_upload_dir = os.getcwd()
-        st.success(f"Đã nạp file thành công: **{uploaded_file.name}**", icon="✅")
+        
+        st.success(f"Đang xử lý file: **{uploaded_file.name}**", icon="🚀")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            md_content = convert_json_to_markdown(json_data, uploaded_images_map, temp_dir, json_upload_dir)
+            with st.spinner("Đang biên dịch cấu trúc tài liệu..."):
+                md_content = convert_json_to_markdown(json_data, uploaded_images_map, temp_dir, json_upload_dir)
 
+            st.markdown("### 📥 Các định dạng xuất file")
             col1, col2, col3 = st.columns(3)
 
             with col1:
-                st.markdown("### 1. Word (Native Math)")
-                st.caption("Công thức toán được Pandoc render chuẩn Word Equation")
-                with st.spinner("Pandoc đang biên dịch..."):
-                    docx_pandoc_bytes = convert_md_to_docx_via_pandoc(md_content, temp_dir)
+                st.markdown("##### 1. Word (Native Math)")
+                st.caption("Công thức chuẩn Word Equation")
+                docx_pandoc_bytes = convert_md_to_docx_via_pandoc(md_content, temp_dir)
 
                 st.download_button(
-                    label="📥 Tải Word (Native Equation)",
+                    label="Tải Word (Native)",
                     data=docx_pandoc_bytes,
                     file_name=f"{base_name}_NativeMath.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -399,12 +450,12 @@ if uploaded_file is not None:
                 )
 
             with col2:
-                st.markdown("### 2. Word (Giữ $...$)")
-                st.caption("Đầy đủ ảnh, giữ nguyên dạng `$latex$` thích hợp dùng MathType")
+                st.markdown("##### 2. Word (Dạng $...$)")
+                st.caption("Thích hợp dùng với MathType")
                 docx_raw_bytes = convert_json_to_docx_raw_bytes(json_data, uploaded_images_map, json_upload_dir)
 
                 st.download_button(
-                    label="📥 Tải Word (Dạng $...$ thô)",
+                    label="Tải Word (Raw Math)",
                     data=docx_raw_bytes,
                     file_name=f"{base_name}_RawMath.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -412,11 +463,10 @@ if uploaded_file is not None:
                 )
 
             with col3:
-                st.markdown("### 3. File Markdown")
-                st.caption("File văn bản thuần dạng .md dùng cho Notion / Obsidian")
-
+                st.markdown("##### 3. File Markdown")
+                st.caption("Dùng cho Notion / Obsidian")
                 st.download_button(
-                    label="📥 Tải File Markdown (.md)",
+                    label="Tải File Markdown",
                     data=md_content,
                     file_name=f"{base_name}.md",
                     mime="text/markdown",
@@ -425,8 +475,11 @@ if uploaded_file is not None:
 
             st.divider()
 
-            st.subheader("👁️ Xem trước nội dung (Preview đã render công thức toán)")
+            # Gọi hàm hiển thị Preview được trang điểm lại
             render_preview_natively(json_data, uploaded_images_map, json_upload_dir)
 
     except Exception as e:
         st.error(f"Đã xảy ra lỗi khi xử lý: {e}")
+else:
+    # Trạng thái chờ khi chưa tải file
+    st.info("👈 Vui lòng tải lên file **JSON** ở thanh bên trái (`Sidebar`) để bắt đầu xem trước và chuyển đổi.")
