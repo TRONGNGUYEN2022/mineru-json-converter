@@ -3,18 +3,14 @@ import io
 import json
 import os
 import re
-import tempfile
 from bs4 import BeautifulSoup
-from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Inches
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
 # --- CẤU HÌNH GIAO DIỆN TRANG ---
 st.set_page_config(
-    page_title="MinerU JSON Math Preview Pro", 
+    page_title="MinerU Math Equation Preview", 
     page_icon="📐", 
     layout="wide"
 )
@@ -23,14 +19,6 @@ st.set_page_config(
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
-    .preview-box {
-        background-color: #ffffff;
-        padding: 30px;
-        border-radius: 12px;
-        border: 1px solid #cbd5e0;
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
-        margin-top: 15px;
-    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -74,20 +62,21 @@ def get_image_bytes(img_path_str, uploaded_images_map, json_upload_dir=""):
                 
     return None
 
-def format_latex_string(latex_str):
-    """Làm sạch chuỗi và bọc công thức trong cặp dấu $...$ chuẩn KaTeX hiển thị công thức đẹp"""
+def clean_and_wrap_latex(latex_str):
+    """Làm sạch chuỗi LaTeX và bọc trong cặp dấu $...$ để KaTeX nhận diện chuẩn Equation"""
     if not latex_str:
         return ""
-    latex_clean = latex_str.strip()
-    if latex_clean.startswith("$") and latex_clean.endswith("$"):
-        latex_clean = latex_clean[1:-1].strip()
-    return f"${latex_clean}$"
+    clean_str = latex_str.strip()
+    # Loại bỏ các dấu $ thừa nếu có sẵn trong JSON
+    if clean_str.startswith("$") and clean_str.endswith("$"):
+        clean_str = clean_str[1:-1].strip()
+    return f"${clean_str}$"
 
 
-# --- 2. RENDER PREVIEW TẬP TRUNG HOÀN TOÀN VÀO CÔNG THỨC TOÁN & SAO CHÉP ---
+# --- 2. RENDER PREVIEW TẬP TRUNG HOÀN TOÀN VÀO CÔNG THỨC TOÁN EQUATION ---
 
 def render_pure_math_preview(json_data, uploaded_images_map, json_upload_dir=""):
-    """Duyệt JSON, render toàn bộ công thức toán học chuẩn KaTeX/Equation và tích hợp nút Copy"""
+    """Duyệt JSON, xử lý chuẩn xác các thẻ inline_equation và bảng biểu chứa công thức toán"""
     
     preview_inner_html = '<div id="content-to-copy" style="font-family: Arial, sans-serif; line-height: 1.8; color: #2d3748; font-size: 16px;">'
     
@@ -108,9 +97,9 @@ def render_pure_math_preview(json_data, uploaded_images_map, json_upload_dir="")
                             else:
                                 p_text += content
                         elif span_type == "inline_equation":
-                            clean_c = content.strip().replace("$", "")
-                            # Bọc công thức để Streamlit/HTML hiểu định dạng toán học rõ ràng
-                            p_text += f" <span style='font-family: Cambria Math, Times New Roman, serif;'>${clean_c}$</span> "
+                            # Đảm bảo công thức toán học được bọc chuẩn KaTeX
+                            latex_formatted = clean_and_wrap_latex(content)
+                            p_text += f" {latex_formatted} "
                 if p_text.strip():
                     preview_inner_html += f"<p style='margin-bottom: 12px;'>{p_text.strip()}</p>"
 
@@ -139,9 +128,10 @@ def render_pure_math_preview(json_data, uploaded_images_map, json_upload_dir="")
                             table_html = span.get("html")
                             if table_html:
                                 soup = BeautifulSoup(table_html, "html.parser")
+                                # Xử lý các thẻ công thức <eq> trong bảng
                                 for eq_tag in soup.find_all("eq"):
-                                    eq_text = eq_tag.get_text().strip().replace("$", "")
-                                    eq_tag.string = f"${eq_text}$"
+                                    eq_text = eq_tag.get_text()
+                                    eq_tag.string = clean_and_wrap_latex(eq_text)
                                 
                                 for img_tag in soup.find_all("img"):
                                     img_src = img_tag.get("src")
@@ -155,7 +145,7 @@ def render_pure_math_preview(json_data, uploaded_images_map, json_upload_dir="")
 
     preview_inner_html += '</div>'
 
-    # Component chứa nút Sao chép và khung hiển thị nội dung tích hợp KaTeX qua CDN
+    # Nhúng KaTeX qua CDN để render toàn bộ công thức toán học (Equation) đẹp mắt và có nút Copy
     copier_component = f"""
     <!DOCTYPE html>
     <html>
@@ -163,7 +153,13 @@ def render_pure_math_preview(json_data, uploaded_images_map, json_upload_dir="")
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
         <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
         <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js" 
-            onload="renderMathInElement(document.body);"></script>
+            onload="renderMathInElement(document.body, {{
+                delimiters: [
+                    {{left: '$$', right: '$$', display: true}},
+                    {{left: '$', right: '$', display: false}}
+                ],
+                throwOnError: false
+            }});"></script>
         <style>
             body {{ font-family: Arial, sans-serif; padding: 10px; background-color: #ffffff; }}
             .btn-copy {{
@@ -228,8 +224,8 @@ def render_pure_math_preview(json_data, uploaded_images_map, json_upload_dir="")
 
 # --- 3. GIAO DIỆN STREAMLIT CHÍNH ---
 
-st.markdown("<h1 style='color: #1a202c;'>📐 MinerU Math Preview & Copy Pro</h1>", unsafe_allow_html=True)
-st.write("Tải lên file JSON kết quả từ MinerU để xem trước trực quan toàn bộ định dạng văn bản, hình ảnh, bảng biểu và đặc biệt là **Công thức toán học (Equation)** sắc nét.")
+st.markdown("<h1 style='color: #1a202c;'>📐 MinerU Math Equation Preview Pro</h1>", unsafe_allow_html=True)
+st.write("Tải lên file JSON kết quả từ MinerU để xem trước trực quan toàn bộ văn bản, hình ảnh, bảng biểu và đặc biệt render chuẩn **Công thức toán học (Equation)**.")
 
 st.markdown("---")
 col_up1, col_up2 = st.columns(2)
@@ -255,7 +251,6 @@ if uploaded_file is not None:
         st.success(f"Đã tải file thành công: **{uploaded_file.name}**", icon="🚀")
         st.divider()
 
-        # Gọi trực tiếp hàm hiển thị xem trước công thức toán học tối ưu
         render_pure_math_preview(json_data, uploaded_images_map, json_upload_dir)
 
     except Exception as e:
