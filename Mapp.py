@@ -40,7 +40,6 @@ st.markdown("""
 # --- 1. CÁC HÀM XỬ LÝ DÙNG CHUNG ---
 
 def get_image_bytes(img_path_str, uploaded_images_map, json_upload_dir=""):
-    """Lấy bytes ảnh từ upload thủ công, URL hoặc thư mục images cùng cấp."""
     if not img_path_str:
         return None
     
@@ -77,7 +76,6 @@ def get_image_bytes(img_path_str, uploaded_images_map, json_upload_dir=""):
     return None
 
 def format_latex_string(latex_str):
-    """Làm sạch chuỗi và bọc công thức trong cặp dấu $...$"""
     if not latex_str:
         return ""
     latex_clean = latex_str.strip()
@@ -305,8 +303,6 @@ def convert_json_to_docx_raw_bytes(json_data, uploaded_images_map, json_upload_d
 # --- 5. RENDER PREVIEW TÍCH HỢP NÚT COPY CLIPBOARD ---
 
 def render_preview_with_copy(json_data, uploaded_images_map, json_upload_dir=""):
-    """Duyệt JSON, hiển thị giao diện đẹp và tích hợp nút Copy nội dung vào clipboard dán nhanh vào Word"""
-    
     preview_inner_html = '<div id="content-to-copy" style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">'
     
     pdf_info = json_data.get("pdf_info", [])
@@ -372,7 +368,6 @@ def render_preview_with_copy(json_data, uploaded_images_map, json_upload_dir="")
 
     preview_inner_html += '</div>'
 
-    # Sử dụng chuỗi thông thường (không phải f-string) hoặc nhân đôi {{ }} cho cú pháp JS
     copier_component = """
     <div style="margin-bottom: 15px;">
         <button onclick="copyContentToClipboard()" style="padding: 10px 20px; background-color: #2b6cb0; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
@@ -409,33 +404,26 @@ def render_preview_with_copy(json_data, uploaded_images_map, json_upload_dir="")
     components.html(copier_component, height=620, scrolling=False)
 
 
-# --- 6. GIAO DIỆN STREAMLIT CHÍNH ---
+# --- 6. GIAO DIỆN STREAMLIT CHÍNH (Đưa phần tải file ra màn hình chính) ---
 
 st.markdown("<h1 style='color: #1a202c;'>🚀 MinerU JSON Converter Pro</h1>", unsafe_allow_html=True)
 st.write("Tải lên file JSON và các ảnh đi kèm để chuyển đổi cấu trúc tài liệu sang Word, Markdown hoặc sao chép trực tiếp.")
 
-# --- SIDEBAR: KHU VỰC TẢI DỮ LIỆU ---
-with st.sidebar:
-    st.header("📂 Nạp dữ liệu")
-    st.markdown("---")
-    
-    uploaded_file = st.file_uploader("📥 Chọn file JSON", type=["json"])
+# Tạo khung tải file ngay ngoài màn hình chính để dễ nhìn, không sợ ẩn Sidebar
+st.markdown("---")
+col_up1, col_up2 = st.columns(2)
+with col_up1:
+    uploaded_file = st.file_uploader("📥 Chọn file JSON từ máy tính", type=["json"])
+with col_up2:
+    uploaded_image_files = st.file_uploader("🖼️ Tải lên thư mục ảnh đi kèm (nếu có)", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
 
-    uploaded_image_files = st.file_uploader(
-        "🖼️ Tải lên thư mục ảnh", 
-        type=["png", "jpg", "jpeg"], 
-        accept_multiple_files=True,
-        help="Có thể chọn nhiều file ảnh đi kèm cùng lúc"
-    )
+uploaded_images_map = {}
+if uploaded_image_files:
+    for img_file in uploaded_image_files:
+        uploaded_images_map[img_file.name] = img_file.getvalue()
+    st.success(f"Đã nạp thành công {len(uploaded_image_files)} file ảnh!", icon="✅")
 
-    uploaded_images_map = {}
-    if uploaded_image_files:
-        for img_file in uploaded_image_files:
-            uploaded_images_map[img_file.name] = img_file.getvalue()
-        st.success(f"Đã nạp {len(uploaded_image_files)} ảnh thành công!", icon="✅")
-        
-    st.markdown("---")
-    st.info("💡 **Mẹo:** Bạn có thể tải file JSON kết quả từ MinerU cùng với các hình ảnh liên quan để hệ thống tự động đồng bộ.")
+st.markdown("---")
 
 # --- XỬ LÝ KHI CÓ FILE JSON ---
 if uploaded_file is not None:
@@ -500,4 +488,4 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"Đã xảy ra lỗi khi xử lý: {e}")
 else:
-    st.info("👈 Vui lòng tải lên file **JSON** ở thanh bên trái (`Sidebar`) để bắt đầu xem trước và chuyển đổi.")
+    st.info("👆 Vui lòng bấm vào nút **Browse files** ở trên để tải lên file **JSON** kết quả từ MinerU.")
